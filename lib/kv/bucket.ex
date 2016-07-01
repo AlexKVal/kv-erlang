@@ -15,4 +15,13 @@ defmodule KV.Bucket do
     Agent.update(bucket, &Map.put(&1, key, value))
     # Agent.update(bucket, fn x -> Map.put(x, key, value) end)
   end
+
+  @doc """
+  Deletes `key` from `bucket`.
+
+  Returns the current value of `key`, if `key` exists.
+  """
+  def delete(bucket, key) do
+    Agent.get_and_update(bucket, &Map.pop(&1, key))
+  end
 end
