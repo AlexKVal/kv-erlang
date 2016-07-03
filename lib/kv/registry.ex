@@ -7,7 +7,7 @@ defmodule KV.Registry do
   Starts the registry with the given `name`.
   """
   def start_link(name) do
-    GenServer.start_link(__MODULE__, :ok, name: name)
+    GenServer.start_link(__MODULE__, name, name: name)
   end
 
   @doc """
@@ -15,8 +15,12 @@ defmodule KV.Registry do
 
   Returns `{:ok, pid}` if the bucket exists, `:error` otherwise.
   """
-  def lookup(server, name) do
-    GenServer.call(server, {:lookup, name})
+  def lookup(server, name) when is_atom(server) do
+    # Lookup is done directrly in ETS, w/o accessing the server
+    case :ets.lookup(server, name) do
+      [{^name, pid}] -> {:ok, pid}
+      [] -> :error
+    end
   end
 
   @doc """
@@ -36,31 +40,28 @@ defmodule KV.Registry do
 
   ## Server Callbacks
 
-  def init(:ok) do
-    names = %{}
+  def init(table) do
+    names = :ets.new(table, [:named_table, read_concurrency: true])
     refs  = %{}
     {:ok, {names, refs}}
   end
 
-  def handle_call({:lookup, name}, _from, {names, _} = state) do
-    {:reply, Map.fetch(names, name), state}
-  end
-
-  def handle_cast({:create, name}, {names, refs} = state) do
-    if Map.has_key?(names, name) do
-      {:noreply, state}
-    else
-      {:ok, bucket} = KV.Bucket.Supervisor.start_bucket
-      ref = Process.monitor(bucket)
-      refs = Map.put(refs, ref, name)
-      names = Map.put(names, name, bucket)
-      {:noreply, {names, refs}}
+  def handle_cast({:create, name}, {names, refs}) do
+    case lookup(names, name) do
+      {:ok, _pid} ->
+        {:noreply, {names, refs}}
+      :error ->
+        {:ok, bucket} = KV.Bucket.Supervisor.start_bucket
+        ref = Process.monitor(bucket)
+        refs = Map.put(refs, ref, name)
+        :ets.insert(names, {name, bucket})
+        {:noreply, {names, refs}}
     end
   end
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, {names, refs}) do
     {name, refs} = Map.pop(refs, ref)
-    names = Map.delete(names, name)
+    :ets.delete(names, name)
     {:noreply, {names, refs}}
   end
 
